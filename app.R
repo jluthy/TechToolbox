@@ -1,25 +1,34 @@
 ##############################################################
 ##        FJ Tech Toolbox by Josh Luthy                     ##
 ##############################################################
-library(shiny)
-library(shinyFiles)
-library(shinydashboard)
-library(shinyWidgets)
-library(flowWorkspace)
-library(CytoML)
-library(ggplot2)
-library(ggiraph)
-library(ggcyto)
-library(FlowSOM)
-library(tidyr)
-library(dplyr)
-library(heatmaply)
-library(plotly)
-library(viridisLite)
-library(DT)
-library(ggplot2)
-library(cowplot)
-library(htmlwidgets)
+packages<-function(x){
+  x<-as.character(match.call()[[2]])
+  if(!require(x,character.only=TRUE)){
+    install.packages(pkgs=x,repos="http://cran.r-project.org")
+    require(x,character.only=TRUE)
+  }
+}
+
+packages(shiny)
+packages(shinyFiles)
+packages(shinydashboard)
+packages(shinyWidgets)
+packages(flowWorkspace)
+packages(CytoML)
+packages(ggplot2)
+packages(ggiraph)
+packages(ggcyto)
+packages(FlowSOM)
+packages(tidyr)
+packages(dplyr)
+packages(heatmaply)
+packages(plotly)
+packages(viridisLite)
+packages(DT)
+packages(ggplot2)
+packages(cowplot)
+packages(htmlwidgets)
+packages(shinyalert)
 
 hmPalette <- c("magma", "plasma", "inferno", "viridis", "cividis", "rainbow")
 paramNames <- c("None", "FlowSOM")
@@ -53,33 +62,6 @@ ui <- fluidPage(
                 ),
                 # ),
                 dashboardBody(
-
-                  tags$head(tags$script('
-                                        // Define function to set height of "map" and "map_container"
-                                        setHeight = function() {
-                                        var window_height = $(window).height();
-                                        var header_height = $(".main-header").height();
-
-                                        var boxHeight = window_height - header_height - 30;
-
-                                        $("#Heatmaps").height(boxHeight);
-                                        $("#heatmaps1").height(boxHeight - 20);
-                                        $("#violins").height(boxHeight);
-                                        $("#violins").height(boxHeight - 20);
-                                        $("#Beeswarms").height(boxHeight);
-                                        $("#Beeswarms").height(boxHeight - 20);
-                                        };
-
-                                        // Set input$box_height when the connection is established
-                                        $(document).on("shiny:connected", function(event) {
-                                        setHeight();
-                                        });
-
-                                        // Refresh the box height on every window resize event
-                                        $(window).on("resize", function(){
-                                        setHeight();
-                                        });
-                                        ')),
                   ##################################################
                   # Define UI Layout for DATA TABLE Tab            #
                   ##################################################
@@ -124,39 +106,32 @@ ui <- fluidPage(
                                   status = "primary", solidHeader = T,
                                   verbatimTextOutput("nodeName"),
                                   DTOutput("table1"),
-                                  actionButton("getWSPdata",
+                                  actionButton("getWSPgating",
                                                label = "Get WSP Gating Heirarchy",
                                                style = "gradient",
                                                color = "success",
                                                size = "sm",
                                                icon = icon("chart-line"),
                                   ),
-                                  actionBttn(
+                                  useShinyalert(), 
+                                  actionButton(
                                     "getPopData",
                                     label = "getPop Matrix",
                                     style = "gradient",
                                     color = "success",
                                     size = "sm",
-                                    icon = icon("chart-line")
-                                  )
+                                    icon = icon("chart-line"))
                               ),
                               box(title ="Workspace Plots View",
                                   width = 6,
                                   status = "primary", solidHeader = T,
-                                  plotOutput("gatingH"),
-
-                                  actionBttn(
-                                    "refreshGSPlot",
-                                    label = "Refresh Plot",
-                                    style = "gradient",
-                                    color = "success",
-                                    size = "sm",
-                                    icon = icon("chart-line")
-                                  )
-
+                                  plotOutput("gatingH",
+                                             click = "plot_click",
+                                             dblclick = "plot_dblclick",
+                                             hover = "plot_hover",
+                                             brush = "plot_brush"),
+                                  verbatimTextOutput("info"),
                               )
-
-
                             ),
                             fluidRow(
                               box(title = "Selected Workspace Population Table",
@@ -219,7 +194,7 @@ ui <- fluidPage(
                                                  status = "warning",
                                                  TRUE)
                                 ),
-                                actionBttn("HMrefreshPlot",
+                                actionButton("HMrefreshPlot",
                                            label = "Refresh Heatmap",
                                            style = "unite",
                                            color = "success",
@@ -265,14 +240,15 @@ ui <- fluidPage(
                                               step = .5,
                                               value = 1.5)
                                 ),
-                                actionBttn(
+                                actionButton(
                                   "freshDimRedux",
                                   label = "Refresh Plot",
                                   style = "gradient",
                                   color = "success",
                                   size = "sm",
                                   icon = icon("chart-line")
-                                ),
+                                  ),
+                                # style = "position:absolute;right:2em;")
                                 girafeOutput("girafePlot"), #download_dimRedux_Rplots
                                 downloadButton("download_dimRedux_Rplots", "Download graph", class = "dimButton"),
                                 tags$head(tags$style("dimButton{background-color:#E8E8E8;} dimButton{color: Black;}"))
@@ -299,7 +275,7 @@ ui <- fluidPage(
                                               multiple = FALSE,
                                               selectize = TRUE)
                                 ),
-                                actionBttn(
+                                actionButton(
                                   "freshCorrPlot",
                                   label = "Refresh Correlation Plots",
                                   style = "gradient",
@@ -320,7 +296,7 @@ ui <- fluidPage(
 # )
 
 # Define server logic
-server <- function(input, output) {
+server <- function(input, output, session) {
 
   ##################################################
   ##    Define Workspace and FCS Files            ##
@@ -375,19 +351,24 @@ server <- function(input, output) {
   ##    Define Workspace Pops of Interest         ##
   ##################################################
 
-  getWSPselekt <- eventReactive(input$getWSPdata, {
+  getWSPselekt <- eventReactive(input$getWSPgating, {
     fjWorkspace <- open_flowjo_xml(ws) # reads the FJ XML
     # reads the fcs files associated withy wsp and the gates
     fjGatingSet <- flowjo_to_gatingset(fjWorkspace, name = 1, path = fcsPath, includeGates = TRUE)
   })
 
-  fjGatingSet2 <- eventReactive(input$getWSPdata, {
+  fjGatingSet2 <- eventReactive(input$getWSPgating, {
     # This will get gatingSet from Flowjo
+    fjWorkspace <- open_flowjo_xml(ws)
+    fjGatingSet <- flowjo_to_gatingset(fjWorkspace, name = 1, path = fcsPath, includeGates = TRUE)
+
+    output$gatingH <- renderPlot(plot(fjGatingSet))
     gs2 <- getWSPselekt()
+    return(gs2)
   })
 
   allNodes <- reactive({
-    go <- input$getWSPdata
+    go <- input$getWSPgating
     # This will find gatingset then get nodes list
     nodelist <- gs_get_pop_paths(fjGatingSet2(), path = "auto")
     # nodelist <- as.data.frame(nodelist)
@@ -410,12 +391,6 @@ server <- function(input, output) {
     return(node_cellsToPlot)
   })
 
-  gatingSetPlot <- eventReactive(input$refreshGSPlot, {
-    fjWorkspace <- open_flowjo_xml(ws)
-    fjGatingSet <- flowjo_to_gatingset(fjWorkspace, name = 1, path = fcsPath, includeGates = TRUE)
-    gs <- plot(fjGatingSet)
-
-  })
 
   finalDF <- eventReactive(input$getPopData,
                            ignoreNULL = TRUE,{
@@ -426,6 +401,24 @@ server <- function(input, output) {
                              myData2 <- as.data.frame(myData2)
                              return(myData2)
                            })
+  
+observeEvent(input$table1_rows_selected, {
+  
+    output$gatingH <- renderPlot({
+      tryCatch({
+        nodeToPlot <- rownames(allNodes()[popSelected$table1_rows_selected,])
+        fjWorkspace <- open_flowjo_xml(ws)
+        fjGatingSet <- flowjo_to_gatingset(fjWorkspace, name = 1, path = fcsPath, includeGates = TRUE)
+        plot(fjGatingSet, nodeToPlot)
+      }, warning = function (w) {
+        writeLine(paste0("an warning occured with plotting",w))
+      }, error = function(e) {
+        shinyalert("Oops!", "Selected terminal population, no plot to show.", type = "error")
+      }, finally = {
+        writeLines("Plotted gates from selected heirarchy, otherwise alerted user")
+      })
+    })
+})
 
   makeObj <- reactive({
     getObject <- input$getPopData
@@ -534,7 +527,7 @@ server <- function(input, output) {
     )
   )
 
-  output$gatingH <- renderPlot( gatingSetPlot() )
+  # output$gatingH <- renderPlot( gatingSetPlot() )
 
   proxy <- dataTableProxy("table1") # start with the proxy and update with plot selections
 
@@ -566,6 +559,24 @@ server <- function(input, output) {
       )
     ) #%>% formatStyle(backgroundColor = styleInterval(3, c('gray', 'yellow')))
   )
+  output$info <- renderText({
+    xy_str <- function(e) {
+      if(is.null(e)) return("NULL\n")
+      paste0("x=", round(e$x, 1), " y=", round(e$y, 1), "\n")
+    }
+    xy_range_str <- function(e) {
+      if(is.null(e)) return("NULL\n")
+      paste0("xmin=", round(e$xmin, 1), " xmax=", round(e$xmax, 1), 
+             " ymin=", round(e$ymin, 1), " ymax=", round(e$ymax, 1))
+    }
+    
+    paste0(
+      "click: ", xy_str(input$plot_click),
+      "dblclick: ", xy_str(input$plot_dblclick),
+      "hover: ", xy_str(input$plot_hover),
+      "brush: ", xy_range_str(input$plot_brush)
+    )
+  })
   #################################
   # Create the Heatmap Data Frame #
   #################################
