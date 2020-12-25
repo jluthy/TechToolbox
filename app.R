@@ -1,3 +1,6 @@
+source("summarySE.R")
+source("rainclouds.R")
+
 ##############################################################
 ##        FJ Tech Toolbox by Josh Luthy                     ##
 ##############################################################
@@ -25,7 +28,7 @@ packages(heatmaply)
 packages(plotly)
 packages(viridisLite)
 packages(DT)
-packages(ggplot2)
+# packages(ggplot2)
 packages(cowplot)
 packages(htmlwidgets)
 packages(shinyalert)
@@ -172,7 +175,7 @@ ui <- fluidPage(
                                   margin = "25px",
                                   tooltip = tooltipOptions(title = "Click to see additional options!"),
                                   uiOutput("hmParameters"),
-                                  uiOutput("hmCatParam"),
+                                  # uiOutput("hmCatParam"),
                                   selectInput("hmCatParam",
                                               label = "Select a Categorical Parameter",
                                               choices = c("None", as.character(paramNames)),
@@ -287,6 +290,44 @@ ui <- fluidPage(
                                 downloadButton("download_corr_plots", "Download correlation graph", class = "corButton"),
                                 tags$head(tags$style("corButton{background-color:#E8E8E8;} corButton{color: Black;}"))
                             ),
+                            box(title ="ViolinBox Plots",
+                                collapsible = TRUE,
+                                collapsed = TRUE,
+                                width = 11,
+                                # height = 200,
+                                status = "primary", solidHeader = T,
+                                dropdownButton(
+                                  circle = FALSE,
+                                  status = "danger",
+                                  icon = icon("bars"),
+                                  size = "sm",
+                                  margin = "25px",
+                                  inline = TRUE,
+                                  tooltip = tooltipOptions(title = "Click to see additional options!"),
+                                  uiOutput("VBParams"),
+                                  uiOutput("VBPCatParam"),
+                                  checkboxInput("grpByParam",
+                                                label = "Group By Parameter",
+                                                FALSE)
+                                  # selectInput("corrPalette",
+                                  #             label = "Select a color palette for heatmap",
+                                  #             choices = hmPalette,
+                                  #             width = '400px',
+                                  #             multiple = FALSE,
+                                  #             selectize = TRUE)
+                                ),
+                                actionButton(
+                                  "freshBox",
+                                  label = "Refresh Box Plots",
+                                  style = "gradient",
+                                  color = "success",
+                                  size = "sm",
+                                  icon = icon("chart-line")
+                                ),
+                                plotlyOutput("boxP1"),
+                                downloadButton("download_box_plots", "Download box plots", class = "boxButton"),
+                                tags$head(tags$style("boxButton{background-color:#E8E8E8;} boxButton{color: Black;}"))
+                            )
 
                     )
                   )
@@ -352,12 +393,30 @@ server <- function(input, output, session) {
   ##################################################
 
   getWSPselekt <- eventReactive(input$getWSPgating, {
+    
+    
     fjWorkspace <- open_flowjo_xml(ws) # reads the FJ XML
     # reads the fcs files associated withy wsp and the gates
     fjGatingSet <- flowjo_to_gatingset(fjWorkspace, name = 1, path = fcsPath, includeGates = TRUE)
   })
 
   fjGatingSet2 <- eventReactive(input$getWSPgating, {
+    
+    # tryCatch({
+    #   fjWorkspace <- open_flowjo_xml(ws)
+    #   fjGatingSet <- flowjo_to_gatingset(fjWorkspace, name = 1, path = fcsPath, includeGates = TRUE)
+    #   
+    #   output$gatingH <- renderPlot(plot(fjGatingSet))
+    #   gs2 <- getWSPselekt()
+    #   return(gs2)
+    # }, warning = function (w) {
+    #   # writeLines("Warning Will Robinson!")
+    #   shinyalert("Oops!", "FCS not found for at least one of the samples.", type = "warning")
+    # }, error = function(e) {
+    #   shinyalert("Oops!", "FCS not found for at least one of the samples.", type = "error")
+    # }, finally = {
+    #   writeLines("Plotted gates from selected heirarchy, otherwise alerted user")
+    # })
     # This will get gatingSet from Flowjo
     fjWorkspace <- open_flowjo_xml(ws)
     fjGatingSet <- flowjo_to_gatingset(fjWorkspace, name = 1, path = fcsPath, includeGates = TRUE)
@@ -411,6 +470,7 @@ observeEvent(input$table1_rows_selected, {
         fjGatingSet <- flowjo_to_gatingset(fjWorkspace, name = 1, path = fcsPath, includeGates = TRUE)
         plot(fjGatingSet, nodeToPlot)
       }, warning = function (w) {
+        # shinyalert("Oops!", "At least one FCS file not found.", type = "warning")
         writeLine(paste0("an warning occured with plotting",w))
       }, error = function(e) {
         shinyalert("Oops!", "Selected terminal population, no plot to show.", type = "error")
@@ -493,6 +553,23 @@ observeEvent(input$table1_rows_selected, {
                 width = '400px',
                 multiple = TRUE,
                 selectize = TRUE)
+  })
+  output$VBParams <- renderUI({
+    selectInput("boxParams",
+                label = "Select Parameters for Box Plots",
+                choices = outParams(),
+                width = '400px',
+                multiple = TRUE,
+                selectize = TRUE)
+  })
+  output$VBPCatParam <- renderUI({
+    selectInput("boxCatParam",
+                label = "Select Parameters for Box Plots",
+                choices = c("None", outParams()),
+                width = '400px',
+                multiple = FALSE,
+                selectize = TRUE,
+                selected = "None")
   })
   ##################################################
   ## Make some data tables ##
@@ -790,6 +867,116 @@ observeEvent(input$table1_rows_selected, {
       saveWidget(as_widget(dimReduxPlotting()), file, selfcontained = TRUE)
     }
   )
+  
+  ######################################
+  # Create Interactive Raincloud Plots #
+  ######################################
+  BoxPlotData <- reactive({
+    if (input$boxCatParam == "None") {
+      vPlotDF <- makeObj()
+      vPlotDF <- vPlotDF@selectedDF
+      # dfnoCat <- df
+      dfnoCat <- select(vPlotDF, input$boxParams)
+      # Use gather function to quickly create the data frame.
+      violinPlotDF <-
+        gather(dfnoCat,
+               key = "Gene",
+               value = "Log2Expression",
+               1:ncol(dfnoCat))
+      tempDF <- sapply(violinPlotDF$Log2Expression, robustLog2)
+      tempDF <-data.frame(matrix(
+                            unlist(tempDF),
+                            nrow = length(tempDF),
+                            byrow = T
+                          ))
+      violinPlotDF <- cbind(violinPlotDF, tempDF)
+      violinPlotDF <-  violinPlotDF[, -2]
+      colnames(violinPlotDF)[2] <- "Log2Expression"
+      
+      violinPlotDF$Log2Expression <-
+        as.numeric(violinPlotDF$Log2Expression)
+      violinPlotDF$Gene <- as.factor(violinPlotDF$Gene)
+      VBPnoCat <- violinPlotDF[violinPlotDF$Gene == input$boxParams,]
+      VBP <- NULL
+      return(VBPnoCat)
+    } else{
+      df <- makeObj()
+      df <- df@selectedDF
+      # Lets take the catParam column and move it to the front of the DF before running gather()
+      dfCat2 <- dplyr::select(df, c(input$boxParams, input$boxCatParam))
+      dfCat2 <- dfCat2 %>%
+        dplyr::select(input$boxCatParam, everything())
+      #   dplyr::filter(input$boxCatParam)# %in% input$clusters)
+      dfCat2 <- dfCat2 %>% dplyr::arrange(input$boxCatParam)
+      
+      # Use gather function to quickly create the data frame.
+      violinPlotDF <-
+        gather(dfCat2,
+               key = "Gene",
+               value = "Log2Expression",
+               2:ncol(dfCat2))
+      if (ncol(violinPlotDF) < 3) {
+        print("Try again")
+        stopAndReturnError("Unable to read the inputs correctly, check parameter names.",
+                           call. = FALSE)
+      }
+      
+      # can use sapply to apply the robustlog2 to Values
+      tempDF <- sapply(violinPlotDF$Log2Expression, robustLog2)
+      tempDF <-
+        data.frame(matrix(
+          unlist(tempDF),
+          nrow = length(tempDF),
+          byrow = T
+        ))
+      violinPlotDF <- cbind(violinPlotDF, tempDF)
+      violinPlotDF <-  violinPlotDF[, -3]
+      colnames(violinPlotDF)[3] <- "Log2Expression"
+      
+      # set up the DF for plotting - Including ordering of factors with levels
+      violinPlotDF$Log2Expression <- as.numeric(violinPlotDF$Log2Expression)
+      # uFact <- unique(as.matrix(violinPlotDF[input$boxCatParam]))
+      # f <- as.factor(gsub("\\s*", "", as.matrix(violinPlotDF[input$boxCatParam])))
+      # violinPlotDF[input$boxCatParam] <- factor(f, levels = uFact, ordered = T)
+      violinPlotDF$Gene <- as.factor(violinPlotDF$Gene)
+      # violinPlotDF <<- violinPlotDF
+      # group by param
+      # if (input$grpByParam == TRUE) {
+      #   colnames(violinPlotDF) <- c("Gene",
+      #                               as.character(input$boxCatParam),
+      #                               "Log2Expression")
+      #   VBP <<- violinPlotDF[violinPlotDF[[input$boxCatParam]] == input$boxParams,]
+      #   
+      # } else{
+        VBP <<- violinPlotDF[violinPlotDF$Gene == input$boxParams,]
+      # }
+        VBPnoCat <- NULL
+      return(VBP)
+    }
+    
+  })
+  
+  boxPlots <- eventReactive(input$freshBox, {
+    
+    # boxMat <- raincloudPlotData() %>% select(as.character(input$boxParams)) # This is much easier to implement without having to remove unwanted columns from above code ex
+    # # GI <- sapply(GI, as.numeric)
+    boxMat <- as.data.frame(BoxPlotData())
+    
+    if (input$grpByParam) {
+      fig <- plot_ly(boxMat, y = ~Log2Expression, x = ~FlowSOM, color = ~Gene, type = "box")
+      fig <- fig %>% layout(boxmode = "group")
+    } else {
+      fig <- plot_ly(boxMat, y = ~Log2Expression, x = ~Gene, color = ~Gene, type = "box", 
+                     boxpoints = "all", jitter = 0.3)
+    }
+    return(fig)
+  })
+  
+  
+  output$boxP1 <- renderPlotly({
+    req(input$freshBox)
+    boxPlots()
+  })
 }
 
 # Run the application

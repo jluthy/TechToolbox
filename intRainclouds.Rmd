@@ -1,0 +1,145 @@
+---
+title: "intRainclouds"
+author: "JL"
+date: "12/25/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Interactive Rainclouds
+
+Below is an examples script to test creation of interactive Raincloud (violinBox) plots using the custom geom, ggplot2, and ggiraph. 
+
+
+```{r interactiveRainclouds}
+source("rainclouds.R")
+# Load libs
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(cowplot)
+library(ggiraph)
+library(plotly)
+
+inCSVPath <- "/Users/10273835/Documents/code/exSpatialTranscriptomics/extData/exAll_Rep4_v2.csv"
+library(data.table)
+df <- fread(inCSVPath, sep = ",", header = TRUE, check.names = FALSE, skip = 5)
+df <- as.data.frame(df)
+
+# Lets take the SampleID column and move it to the front of the DF before running gather()
+# input <- df %>% select(Phenograph_9222, everything())
+catParam <- "Phenograph_9222"
+input <- df %>% select(catParam, everything())
+input <- input[1:8]
+input$CellId <- NULL
+# input$`FlowSOM_CD3-HLADR-` <-  as.numeric(input$`FlowSOM_CD3-HLADR-`)
+# Use gather function to quickly create the data frame. 
+violinPlotDF <- pivot_longer(input,
+                             names_to = "Gene",
+                             values_to = "Log2Expression",
+                             cols = 2:ncol(input))
+
+robustLog2 <- function(x) {
+  x <- as.numeric(x)
+  if (x >= 0) {
+    log(x + 1, 2)
+  } else {
+    0
+  }
+}
+
+tempDF <- sapply(violinPlotDF$Log2Expression, robustLog2)
+tempDF <- data.frame(matrix(
+    unlist(tempDF),
+    nrow = length(tempDF),
+    byrow = T
+  ))
+violinPlotDF <- cbind(violinPlotDF, tempDF)
+violinPlotDF <-  violinPlotDF[, -3]
+colnames(violinPlotDF)[3] <- "Log2Expression"
+
+violinPlotDF$Log2Expression <-
+  as.numeric(violinPlotDF$Log2Expression)
+violinPlotDF$Gene <- as.factor(violinPlotDF$Gene)
+violinPlotDF$Phenograph_9222 <- as.factor(violinPlotDF$Phenograph_9222)
+# VBPnoCat <- violinPlotDF[violinPlotDF$Gene == input$Parameters,]
+
+
+# (input, key = "Gene", value = "Log2Expression", 2:ncol(input))
+if(ncol(violinPlotDF) < 3){
+  print("Try again")
+  stopAndReturnError("Unable to read the inputs correctly, check parameter names.", call. = FALSE)
+}
+
+# will use this to transform the data prior to plotting
+robustLog2 <- function(x) {
+  x <- as.numeric(x)
+  if (x >= 0) {
+    log(x + 1, 2)
+  } else {
+    0
+  }
+}
+
+# can use sapply to apply the robustlog2 to Values
+tempDF <- sapply(violinPlotDF$Log2Expression, robustLog2)
+tempDF <- data.frame(matrix(unlist(tempDF), nrow=length(tempDF), byrow=T))
+violinPlotDF <- cbind(violinPlotDF, tempDF)
+violinPlotDF <-  violinPlotDF[,-3]
+colnames(violinPlotDF)[3] <- "Log2Expression"
+rm(tempDF)
+
+# set up the DF for plotting
+violinPlotDF$Log2Expression <- as.numeric(violinPlotDF$Log2Expression)
+violinPlotDF$Gene <- as.factor(violinPlotDF$Gene)
+violinPlotDF$Phenograph_9222 <- as.factor(violinPlotDF$Phenograph_9222)
+
+#Rainclouds with boxplots
+p6 <- ggplot(violinPlotDF,aes(x=Gene,y=Log2Expression, fill = Gene, colour = Gene)) +
+  geom_flat_violin(position = position_nudge(x = .25, y = 0),adjust =2.5, trim = FALSE) +
+  geom_point_interactive(aes(color= Gene,
+                             tooltip = paste0(Log2Expression),
+                             data_id = Gene),alpha=.05, position = position_jitter(width = .08, height = 3), size = 1) +
+  geom_boxplot_interactive(aes(x = as.numeric(Gene)+0.25, y = Log2Expression,
+                               tooltip = Gene,
+                               data_id=Gene),outlier.shape = NA, alpha = 0.3, width = .1, colour = "BLACK") +
+  ylab('Log2Expression')+xlab('Gene')+coord_flip()+theme_cowplot()+guides(fill = FALSE, colour = FALSE) +
+  scale_colour_brewer(palette = "Dark2")+
+  scale_fill_brewer(palette = "Dark2")+
+  ggtitle("Figure 6: Interactive Raincloud Plots")
+# ggsave('6boxplots.png', width = w, height = h)
+p6
+
+# Rainclouds for repeated measures, continued 
+# p10 <- ggplot(violinPlotDF, aes(x = Gene, y = Log2Expression, fill = Phenograph_9222)) +
+#   geom_flat_violin(aes(fill = Phenograph_9222),
+#                    position = position_nudge(x = .1, y = 0), 
+#                    adjust = 2, trim = FALSE, alpha = .5, colour = NA)+
+#   geom_point_interactive(alpha = .08, aes(x = as.numeric(Gene)-.15,
+#                               y = Log2Expression,
+#                               colour = Phenograph_9222,
+#                               tooltip = Phenograph_9222),
+#                               position = position_jitter(width = .05, height =3),
+#                               size = .75,
+#                               shape = 21)+
+#   geom_boxplot_interactive(aes(x = Gene, 
+#                    y = Log2Expression, 
+#                    fill = Phenograph_9222),
+#                    outlier.shape = NA, 
+#                    alpha = .5, width = .1, 
+#                    colour = "black")+
+#   # facet_wrap(~SampleID)+
+#   # coord_flip()+
+#   scale_colour_brewer(palette = "Dark2")+
+#   scale_fill_brewer(palette = "Dark2")+
+#   ggtitle("Figure 10: Repeated Measures Factorial Rainclouds")
+# p10
+interact.rainclouds <- girafe(code = print(p6),
+                           options = list(opts_tooltip(use_fill = TRUE)))
+interact.rainclouds
+
+```
